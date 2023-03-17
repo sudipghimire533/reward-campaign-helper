@@ -10,4 +10,7 @@ sp-core = "18.0.0"
 sp-keyring = "20.0.0"
 tokio = { version = "1.26", features = ["rt-multi-thread", "macros", "time"] }
 tracing-subscriber = "0.3.11"
-serde-json = { version = "1", fatures = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", feature = ["derive"] }
+lazy_static = "1"
