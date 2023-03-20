@@ -1,0 +1,10 @@
+{
+    "campaign": {
+        "hoster": "4KY6ZgnETcZXZCnWJSrhUrq3YJew37voJLxdMimSDim9P7gY",
+        "campaignId": 9,
+        "startsFrom": 1000,
+        "endsAt": 2420200,
+        "instantPercentage": [1, 2]
+    },
+    "contributers": "contributers.json"
+}
