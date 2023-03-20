@@ -3,27 +3,24 @@ const NODE_CONNECT: &'static str = "ws://127.0.0.1:9988";
 #[subxt::subxt(runtime_metadata_path = "chain-metadata.scale")]
 pub mod datahighway {}
 
-use clap::builder::StringValueParser;
 use datahighway::runtime_types::pallet_reward_campaign::types as campaign_types;
 use lazy_static::lazy_static;
-use serde::de::value::StringDeserializer;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use sp_core::sr25519::Pair as Sr25519Pair;
 use sp_core::Pair;
-use sp_keyring::AccountKeyring;
 use std::error::Error as StdError;
 use std::fs::File;
 use std::io::BufReader;
-use std::option;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use subxt::blocks::ExtrinsicEvents;
 use subxt::config::Config;
-use subxt::ext::sp_runtime::traits::Zero;
-use subxt::tx::{TxInBlock, TxPayload};
-use subxt::utils::AccountId32;
-use subxt::{tx, OnlineClient, PolkadotConfig, SubstrateConfig};
+use subxt::tx::TxPayload;
+use subxt::{tx, SubstrateConfig};
 
 type DatahighwayOnlineClient = subxt::client::OnlineClient<DatahighwayConfig>;
+
+const DHX: Balance = 1_000_000_000_000_000_000;
 
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct DatahighwayConfig;
@@ -64,9 +61,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = serde_json::from_reader::<_, InputFile>(input_file_reader).unwrap();
     let campaign = input.process().unwrap();
 
-    // this is the campaign_id
-    let campaign_id = campaign.campaign_id;
-
     campaign.create(&api).await.unwrap();
     println!("Campaign started...");
 
@@ -89,39 +83,6 @@ async fn start_campaign(
     Ok(())
 }
 
-async fn update_campaign(
-    api: &DatahighwayOnlineClient,
-    campaign_id: CampaignId,
-    new_campaign_info: UpdateCampaignParams,
-) -> Result<(), Box<dyn StdError>> {
-    let call = datahighway::tx()
-        .reward()
-        .update_campaign(campaign_id, new_campaign_info);
-    submit_and_watch(api, call).await?;
-
-    Ok(())
-}
-
-async fn discard_campaign(
-    api: &DatahighwayOnlineClient,
-    campaign_id: CampaignId,
-) -> Result<(), Box<dyn StdError>> {
-    let call = datahighway::tx().reward().discard_campaign(campaign_id);
-    submit_and_watch(api, call).await?;
-
-    Ok(())
-}
-
-async fn wipe_campaign(
-    api: &DatahighwayOnlineClient,
-    campaign_id: CampaignId,
-) -> Result<(), Box<dyn StdError>> {
-    let call = datahighway::tx().reward().wipe_campaign(campaign_id);
-    submit_and_watch(api, call).await?;
-
-    Ok(())
-}
-
 async fn add_contributer(
     api: &DatahighwayOnlineClient,
     campaign_id: CampaignId,
@@ -136,33 +97,10 @@ async fn add_contributer(
     Ok(())
 }
 
-async fn remove_contributer(
-    api: &DatahighwayOnlineClient,
-    campaign_id: CampaignId,
-    contributer: AccountId,
-) -> Result<(), Box<dyn StdError>> {
-    let call = datahighway::tx()
-        .reward()
-        .remove_contributer(campaign_id, contributer);
-    submit_and_watch(api, call).await?;
-
-    Ok(())
-}
-
-async fn lock_campaign(
-    api: &DatahighwayOnlineClient,
-    campaign_id: CampaignId,
-) -> Result<(), Box<dyn StdError>> {
-    let call = datahighway::tx().reward().lock_campaign(campaign_id);
-    submit_and_watch(api, call).await?;
-
-    Ok(())
-}
-
 async fn submit_and_watch<Call>(
     api: &DatahighwayOnlineClient,
     call: Call,
-) -> Result<TxInBlock<DatahighwayConfig, DatahighwayOnlineClient>, subxt::Error>
+) -> Result<ExtrinsicEvents<DatahighwayConfig>, subxt::Error>
 where
     Call: TxPayload,
 {
@@ -171,6 +109,8 @@ where
         .sign_and_submit_then_watch(&call, &signer, Default::default())
         .await?
         .wait_for_in_block()
+        .await?
+        .wait_for_success()
         .await
 }
 
@@ -192,6 +132,7 @@ lazy_static! {
                 .unwrap()
         })
     };
+    static ref TOTAL_KSM_RAISED: Mutex<Balance> = 0_u128.into();
 }
 
 fn signer() -> PairSigner {
@@ -199,30 +140,36 @@ fn signer() -> PairSigner {
 }
 
 type CreateCampaignParams = campaign_types::CreateCampaignParam<AccountId, BlockNumber>;
-type UpdateCampaignParams = campaign_types::UpdateCampaignParam<AccountId, BlockNumber>;
-type CampaignInfo = campaign_types::CampaignReward<AccountId, BlockNumber>;
 type CampaignId = u32;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct Contributer {
     pub who: AccountId,
-    #[serde(deserialize_with = "string_to_balance")]
+    #[serde(deserialize_with = "contributed_string_to_balance")]
     contributed: Balance,
 }
 
-fn string_to_balance<'de, D>(input: D) -> Result<Balance, D::Error>
+fn contributed_string_to_balance<'de, D>(input: D) -> Result<Balance, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let quoted: String = Deserialize::deserialize(input)?;
-    Ok(quoted.parse::<Balance>().unwrap())
+    let balance = quoted.parse::<Balance>().unwrap();
+    let new_total = TOTAL_KSM_RAISED
+        .lock()
+        .unwrap()
+        .checked_add(balance)
+        .unwrap();
+    *TOTAL_KSM_RAISED.lock().unwrap() = new_total;
+    Ok(balance)
 }
 
 impl Contributer {
     pub fn reward_amount(&self) -> Balance {
-        // convert contributed amount to reward amount
-        // FIXME:
-        self.contributed.clone()
+        // borrowed from: https://dev.datahighway.com/docs/crowdloans/crowdloan-tanganika#contributor-rewards
+        let reward_pool = 300_000 * DHX;
+
+        self.contributed * reward_pool / TOTAL_KSM_RAISED.lock().unwrap().to_owned()
     }
 }
 
@@ -268,7 +215,7 @@ impl Campaign {
         api: &DatahighwayOnlineClient,
     ) -> Result<(), Box<dyn StdError>> {
         for contributer in self.contributers.iter() {
-            if let Err(err) = add_contributer(
+            match add_contributer(
                 api,
                 self.campaign_id,
                 contributer.who.clone(),
@@ -276,14 +223,18 @@ impl Campaign {
             )
             .await
             {
-                eprintln!(
-                    "Error while adding contributer: {}. Error: {err:?}",
-                    contributer.who
-                );
-                eprintln!("Skipping and moving to next..");
-            }
+                Err(err) => {
+                    eprintln!(
+                        "Error while adding contributer: {}. Error: {err:?}",
+                        contributer.who
+                    );
+                    eprintln!("Skipping and moving to next..");
+                }
 
-            println!("Contributer {} added to campaign...", contributer.who);
+                Ok(_res) => {
+                    println!("Contributer {} added to campaign...", contributer.who);
+                }
+            }
         }
 
         Ok(())
