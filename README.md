@@ -3,7 +3,7 @@ Helper script to create and add crowdloan contrbuter in datahighway chain
 
 ## How to run
 - Create a `input.json` file. Example: [`input.json`](res/input.json)
-- Download the json list of all crowdloan contributer and put it in same directory as `input.json`. Example: [`contributers.json`]
+- Download the json list of all crowdloan contributer and put it in same directory as `input.json`. Example: [`contributers.json`](res/contributers.json)
 - Download and keep the binary in same directory as above two file
 - Make a key file with the seed prashe from which the extrinsic will be signed
 Example:
