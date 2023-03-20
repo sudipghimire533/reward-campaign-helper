@@ -56,10 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .next()
         .unwrap_or("reward-campaign.json".to_string());
     let input_file = File::open(input_file_name).unwrap();
-    println!("Input file: {:?}", input_file);
     let input_file_reader = BufReader::new(input_file);
     let input = serde_json::from_reader::<_, InputFile>(input_file_reader).unwrap();
     let campaign = input.process().unwrap();
+
+    println!("Total ksm raised: {}", campaign.total_ksm_raised.unwrap());
 
     campaign.create(&api).await.unwrap();
     println!("Campaign started...");
@@ -132,7 +133,6 @@ lazy_static! {
                 .unwrap()
         })
     };
-    static ref TOTAL_KSM_RAISED: Mutex<Balance> = 0_u128.into();
 }
 
 fn signer() -> PairSigner {
@@ -155,21 +155,15 @@ where
 {
     let quoted: String = Deserialize::deserialize(input)?;
     let balance = quoted.parse::<Balance>().unwrap();
-    let new_total = TOTAL_KSM_RAISED
-        .lock()
-        .unwrap()
-        .checked_add(balance)
-        .unwrap();
-    *TOTAL_KSM_RAISED.lock().unwrap() = new_total;
     Ok(balance)
 }
 
 impl Contributer {
-    pub fn reward_amount(&self) -> Balance {
+    pub fn reward_amount(&self, ksm_raised: Balance) -> Balance {
         // borrowed from: https://dev.datahighway.com/docs/crowdloans/crowdloan-tanganika#contributor-rewards
-        let reward_pool = 300_000 * DHX;
+        let reward_pool =  300_000 * DHX * 357 / 1000;
 
-        self.contributed * reward_pool / TOTAL_KSM_RAISED.lock().unwrap().to_owned()
+        reward_pool * self.contributed / ksm_raised
     }
 }
 
@@ -187,6 +181,8 @@ pub struct Campaign {
     pub hoster: AccountId,
     #[serde(skip)]
     pub contributers: Vec<Contributer>,
+    #[serde(skip)]
+    total_ksm_raised: Option<Balance>,
 }
 
 impl Campaign {
@@ -219,7 +215,7 @@ impl Campaign {
                 api,
                 self.campaign_id,
                 contributer.who.clone(),
-                contributer.reward_amount(),
+                contributer.reward_amount(self.total_ksm_raised.unwrap()),
             )
             .await
             {
@@ -255,12 +251,17 @@ impl InputFile {
             contributers_file,
         } = self;
 
-        println!("Contributer file: {:?}", contributers_file);
         let contributer_file = File::open(contributers_file)?;
         let reader = BufReader::new(contributer_file);
         let contributers = serde_json::from_reader::<_, Vec<Contributer>>(reader)?;
 
-        campaign.contributers = contributers;
+        let mut total = 0;
+        for c in contributers {
+            total += c.contributed;
+            campaign.contributers.push(c);
+        }
+
+        campaign.total_ksm_raised = Some(total);
 
         Ok(campaign)
     }
