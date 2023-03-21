@@ -12,15 +12,16 @@ use std::error::Error as StdError;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use subxt::blocks::ExtrinsicEvents;
 use subxt::config::Config;
 use subxt::tx::TxPayload;
+use subxt::utils::AccountId32;
 use subxt::{tx, SubstrateConfig};
 
 type DatahighwayOnlineClient = subxt::client::OnlineClient<DatahighwayConfig>;
 
 const DHX: Balance = 1_000_000_000_000_000_000;
+const KSM: Balance = 1_000_000_000_000;
 
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct DatahighwayConfig;
@@ -60,7 +61,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = serde_json::from_reader::<_, InputFile>(input_file_reader).unwrap();
     let campaign = input.process().unwrap();
 
-    println!("Total ksm raised: {}", campaign.total_ksm_raised.unwrap());
+    println!("Reward rate will be approx {} DHX per KSM contributed", {
+        Contributer {
+            who: AccountId32::from([0_u8; 32]),
+            contributed: 1 * KSM,
+        }
+        .reward_amount() as f32 / DHX as f32
+    });
 
     campaign.create(&api).await.unwrap();
     println!("Campaign started...");
@@ -159,11 +166,12 @@ where
 }
 
 impl Contributer {
-    pub fn reward_amount(&self, ksm_raised: Balance) -> Balance {
+    pub fn reward_amount(&self) -> Balance {
         // borrowed from: https://dev.datahighway.com/docs/crowdloans/crowdloan-tanganika#contributor-rewards
-        let reward_pool =  300_000 * DHX * 357 / 1000;
+        let reward_pool = 300_000 * DHX;
+        let contributed_cap = 15_000 * KSM;
 
-        reward_pool * self.contributed / ksm_raised
+        reward_pool * self.contributed / contributed_cap
     }
 }
 
@@ -181,8 +189,6 @@ pub struct Campaign {
     pub hoster: AccountId,
     #[serde(skip)]
     pub contributers: Vec<Contributer>,
-    #[serde(skip)]
-    total_ksm_raised: Option<Balance>,
 }
 
 impl Campaign {
@@ -215,7 +221,7 @@ impl Campaign {
                 api,
                 self.campaign_id,
                 contributer.who.clone(),
-                contributer.reward_amount(self.total_ksm_raised.unwrap()),
+                contributer.reward_amount(),
             )
             .await
             {
@@ -255,13 +261,7 @@ impl InputFile {
         let reader = BufReader::new(contributer_file);
         let contributers = serde_json::from_reader::<_, Vec<Contributer>>(reader)?;
 
-        let mut total = 0;
-        for c in contributers {
-            total += c.contributed;
-            campaign.contributers.push(c);
-        }
-
-        campaign.total_ksm_raised = Some(total);
+        campaign.contributers = contributers;
 
         Ok(campaign)
     }
